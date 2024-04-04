@@ -1,0 +1,18 @@
+<launch>
+    <arg name="map_file" default="$(find hma_pointing_pkg)/config/map/map.yaml"/>
+    <arg name="furniture_json" default="$(find hma_pointing_pkg)/config/json/furniture.json" />
+    <arg name="arena_json" default="$(find hma_rc22_config_pkg)/io/json/living.json" />
+
+    <node pkg="map_server" type="map_server" name="map_server" args="$(arg map_file)"  output="screen" />
+
+    <node pkg="hma_pointing_pkg" type="env_marker_node.py" name="env_marker_node" output="screen">
+        <param name="/furniture_json" type="str" value="$(arg furniture_json)"/>
+        <param name="/arena_json" type="str" value="$(arg arena_json)"/>
+    </node>
+
+    <node pkg="hma_pointing_pkg" type="visualize_clicked_point_node.py" name="visualize_clicked_point_node"  />
+
+    <arg name="rviz" default="true"/>
+    <node pkg="rviz" type="rviz" name="rviz" args="-d $(find hma_pointing_pkg)/config/rviz/rviz.rviz" if="$(arg rviz)"/>
+
+</launch>

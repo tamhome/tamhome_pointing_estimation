@@ -1,0 +1,12 @@
+<launch>
+    <arg name="3d_pose" default="ax_pose_estimation_node/3d_pose" />
+    <arg name="arena_json" default="$(find hma_pointing_pkg)/config/json/arena.json" />
+    <arg name="start_node" default="false"/>
+
+    <node pkg="hma_pointing_pkg" type="focus_person_node.py" name="focus_person_node" output="screen">
+        <param name="/3d_pose" type="str" value="$(arg 3d_pose)"/>
+        <param name="/arena_json" type="str" value="$(arg arena_json)"/>
+        <param name="/start_node" type="bool" value="$(arg start_node)" />
+    </node>
+
+</launch>
