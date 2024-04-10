@@ -18,11 +18,12 @@ import collections
 
 from tamlib.utils import Logger
 
-from visualization_msgs.msg import Marker, MarkerArray
-from geometry_msgs.msg import Point, PointStamped
 
 from std_msgs.msg import Bool
+from geometry_msgs.msg import Point, PointStamped
 from std_srvs.srv import SetBool, SetBoolResponse
+from visualization_msgs.msg import Marker, MarkerArray
+from tam_mmaction2.msg import Ax3DPoseWithLabel, Ax3DPoseWithLabelArray
 
 
 class PointingEstimation(Logger):
@@ -37,17 +38,20 @@ class PointingEstimation(Logger):
 
         # 制御用変数
         self.latest_pose = None
+        self.update_flag = False
         self.prv_pointed_furniture = None  # どの家具を指差していたかを制御
         self.right_arm_pose_buffer = collections.deque(maxlen=self.buffer_len)
         self.left_arm_pose_buffer = collections.deque(maxlen=self.buffer_len)
         self.pointing_position_buffer = collections.deque(maxlen=self.pointing_buffer_len)
 
         # ros interface
-        rospy.Subscriber("/mmaction2/pose/with_label", PoseWithLabel, self.cb_pose_array, queue_size=1)
+        rospy.Subscriber("/mmaction2/poses/with_label", Ax3DPoseWithLabelArray, self.cb_pose_array, queue_size=1)
         self.pub_pointing_line = rospy.Publisher("~pointing_line", Marker, queue_size=1)
         self.pub_pointing_position = rospy.Publisher("~pointing_position", Marker, queue_size=1)
 
     def delete(self):
+        """デストラクタ
+        """
         return
 
     # コールバック関数
@@ -55,6 +59,7 @@ class PointingEstimation(Logger):
         """最新の骨格情報を取得する関数
         """
         self.latest_pose = msg
+        self.update_flag = True
 
     def check_straight_arm(self, target_arm_position) -> bool:
         """腕が伸びているかを確認する関数（伸びている＝指を指している）
@@ -119,8 +124,13 @@ class PointingEstimation(Logger):
                 rospy.sleep(0.1)
                 continue
 
+            # 新しい姿勢推定情報が入ってきていない場合はスキップ
+            if not self.update_flag:
+                rospy.sleep(0.1)
+                continue
+
             # 最新の人物の姿勢を取得
-            target_person = None
+            target_person = self.latest_pose
 
             # 制御用の変数初期化
             left_arm_pose  = None
@@ -152,6 +162,7 @@ class PointingEstimation(Logger):
             # If neither arm is available, skip
             if left_arm_pose is None and right_arm_pose is None:
                 self.logwarn("腕が画角内に写っていません．")
+                self.update_flag = False
                 continue
 
             # one arm is available
@@ -162,7 +173,8 @@ class PointingEstimation(Logger):
                     target_wrist_point = target_positon_median[2]
                     target_shoulder_point = target_positon_median[0]
                 else:
-                    self._lock.release()
+                    # self._lock.release()
+                    self.update_flag = False
                     continue
             elif right_arm_pose is None:
                 self.loginfo("Focus on left arm")
@@ -171,7 +183,8 @@ class PointingEstimation(Logger):
                     target_wrist_point = target_positon_median[2]
                     target_shoulder_point = target_positon_median[0]
                 else:
-                    self._lock.release()
+                    # self._lock.release()
+                    self.update_flag = False
                     continue
 
             # if both arm is available
@@ -184,6 +197,7 @@ class PointingEstimation(Logger):
                 # どちらも指を指していない場合
                 if abs(left_arm_direction_vector[0]) < self.pointing_threshold and abs(left_arm_direction_vector[2]) < self.pointing_threshold and abs(right_arm_direction_vector[0]) < self.pointing_threshold and abs(right_arm_direction_vector[2]) < self.pointing_threshold:
                     # self._lock.release()
+                    self.update_flag = False
                     self.loginfo("Person do not pointing. skip")
                     continue
 
@@ -196,6 +210,7 @@ class PointingEstimation(Logger):
                         target_shoulder_point  = target_positon_median[0]
                     else:
                         # self._lock.release()
+                        self.update_flag = False
                         continue
 
                 # 右腕で指を指していた場合
@@ -207,11 +222,13 @@ class PointingEstimation(Logger):
                         target_shoulder_point  = target_positon_median[0]
                     else:
                         # self._lock.release()
+                        self.update_flag = False
                         continue
 
                 else:
                     # self._lock.release()
                     self.logdebug("Cannot detect pointing direction. skip")
+                    self.update_flag = False
                     continue
 
             target_frame = self._furniture_json[0]["frame"]
