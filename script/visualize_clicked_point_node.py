@@ -34,7 +34,6 @@ class visualizeClickePoint(object):
 
 
 if __name__ == "__main__":
-    # ROS Initialize
     rospy.init_node("visualize_clicked_point_node")
     vcp = visualizeClickePoint()
     rospy.spin()
