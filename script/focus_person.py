@@ -20,75 +20,72 @@ from geometry_msgs.msg import Quaternion, Pose, Point
 # from hma_ailia_msgs.msg import Ax3DPoseArray
 from tamlib.node_template import Node
 
-from hsrlib.hsrif import HSRInterfaces
-from hsrnavlib import LibHSRNavigation
-from hsrlib.utils import utils, description, joints, locations
 from tamlib.tf import Transform, euler2quaternion, transform_pose
 from tam_mmaction2.msg import Ax3DPoseWithLabelArray, Ax3DPoseWithLabel, AxKeyPoint
+
 
 class FocusPersonNode(Node):
     def __init__(self):
         super().__init__(loglevel="DEBUG")
 
         # HSRに接続するためのインタフェースを確立
-        # self.searc_point = SearchSafePoint()
-        self.description = description.load_robot_description()
-        self.hsrif = HSRInterfaces()
-        self.hsrnav = LibHSRNavigation()
         self.tamtf = Transform()
-        # self.speech_recog = LibSpeechRecog()
+        self.sigverse_flag = rospy.get_param("~is_sigverse", True)
+
+        if self.sigverse_flag is False:
+            # 実機用コード
+            from hsrlib.utils import utils, description, joints, locations
+            from hsrnavlib import LibHSRNavigation
+            from hsrlib.hsrif import HSRInterfaces
+            self.description = description.load_robot_description()
+            self.hsrif = HSRInterfaces()
+            self.hsrnav = LibHSRNavigation()
+            # self.speech_recog = LibSpeechRecog()
+        else:
+            self.frame_map = "map"
+            self.frame_baselink = "base_footprint"
+            self.frame_rgbd = "head_rgbd_sensor_link"
 
         # ros interface
         self._p_pose = rospy.get_param("~3d_pose", "/3d_pose")
         self._p_arena_json = rospy.get_param("~arena_json", "arena.json")
-        self.run_enable = rospy.get_param("~start_node", False)
+        self.run_enable = rospy.get_param("~start_node", True)
         self.sholder_th = rospy.get_param("~sholder_th", 0.7)
         self.sholder_distance = rospy.get_param("sholder_distance", 1.0)
 
         self._p_omni_joint_state = "/hsrb/omni_base_controller/state"
         self._p_head_joint_state = "/hsrb/head_trajectory_controller/state"
 
-        self._srv_run_enable = rospy.Service("~run_enable", SetBool, self.srvfSwitchRunEnable)
+        # self._srv_run_enable = rospy.Service("~run_enable", SetBool, self.srvfSwitchRunEnable)
         self._pub_omni_base_controller = rospy.Publisher("/hsrb/omni_base_controller/command", JointTrajectory, queue_size=1)
         self._pub_omni_base_controller = rospy.Publisher("/hsrb/omni_base_controller/command", JointTrajectory, queue_size=1)
         self._pub_head_controller = rospy.Publisher("/hsrb/head_trajectory_controller/command", JointTrajectory, queue_size=1)
 
-        self._sub_smi_3d_pose = message_filters.Subscriber(self._p_pose, Ax3DPoseArray)
-        self._sub_smi_omni_joint_state = message_filters.Subscriber(self._p_omni_joint_state, JointTrajectoryControllerState)
-        self._sub_smi_head_joint_state = message_filters.Subscriber(self._p_head_joint_state, JointTrajectoryControllerState)
+        # self._sub_smi_3d_pose = message_filters.Subscriber(self._p_pose, Ax3DPoseWithLabelArray)
+        # self._sub_smi_omni_joint_state = message_filters.Subscriber(self._p_omni_joint_state, JointTrajectoryControllerState)
+        # self._sub_smi_head_joint_state = message_filters.Subscriber(self._p_head_joint_state, JointTrajectoryControllerState)
 
-        interface = [self._sub_smi_3d_pose, self._sub_smi_omni_joint_state, self._sub_smi_head_joint_state]
-        self._sync = message_filters.ApproximateTimeSynchronizer(interface, 10, 0.1, allow_headerless=True)
-        self._sync.registerCallback(self.subf3DPoseJointState)
+        # interface = [self._sub_smi_3d_pose, self._sub_smi_omni_joint_state, self._sub_smi_head_joint_state]
+        # self._sync = message_filters.ApproximateTimeSynchronizer(interface, 10, 0.1, allow_headerless=True)
+        # self._sync.registerCallback(self.subf3DPoseJointState)
 
     def delete(self):
         """デストラクタ"""
         return
 
-    # def srvfSwitchRunEnable(self, req):
-    #     """"""
-    #     res = SetBoolResponse()
-    #     if req.data:
-    #         self._run_enable = True
-    #         res.message = "forcus person enabled"
-    #     else:
-    #         self._run_enable = False
-    #         res.message = "forcus person disabled"
-    #     res.success = True
-    #     return res
-
-    # def subf3DPoseJointState(self, smi_3d_pose_array, smi_omni_joint_state, smi_head_joint_state):
-    #     self._lock.acquire()
-    #     self._smi_3d_pose_array = smi_3d_pose_array
-    #     self._person_frame = smi_3d_pose_array.header.frame_id
-    #     self._smi_omni_joint_state = smi_omni_joint_state
-    #     self._smi_head_joint_state = smi_head_joint_state
-    #     self._lock.release()
-
-    #     fn = sys._getframe().f_code.co_name
-    #     self._update_ros_time[fn] = rospy.Time.now()
-
-    #     return
+    def calculate_distance(self, keypoint_1: Point, keypoint_2: Point):
+        """keypoint間の距離を計算する関数
+        Args:
+            keypoint_1(Point):
+            keypoint_2(Point):
+        Returns:
+            float: 距離
+        """
+        x = keypoint_1.x - keypoint_2.x
+        y = keypoint_1.y - keypoint_2.y
+        z = keypoint_1.z - keypoint_2.z
+        distance = math.sqrt(x**2 + y**2 + z**2)
+        return distance
 
     def tracking_with_omni(self, human_info: Ax3DPoseWithLabel) -> None:
         """人の骨格情報をもとに人を追いかける
@@ -98,21 +95,38 @@ class FocusPersonNode(Node):
             None
         """
         # get person pose from base_link
+        print(type(human_info.keypoints.nose.point))
         nose_point: Point = human_info.keypoints.nose.point
-        nose_pose_from_map: Pose = self.tamtf.get_pose_with_offset(
-            target_frame=self.description.frame.map,
-            source_frame=self.description.frame.rgbd,
-            offset=Pose(nose_point, Quaternion(0, 0, 0, 1)),
-        )
 
-        nose_pose_from_baselink: Pose = self.tamtf.get_pose_with_offset(
-            target_frame=self.description.frame.baselink,
-            source_frame=self.description.frame.rgbd,
-            offset=Pose(nose_point, Quaternion(0, 0, 0, 1)),
-        )
+        # 実機
+        if self.sigverse_flag is False:
+            nose_pose_from_map: Pose = self.tamtf.get_pose_with_offset(
+                target_frame=self.description.frame.map,
+                source_frame=self.description.frame.rgbd,
+                offset=Pose(nose_point, Quaternion(0, 0, 0, 1)),
+            )
 
-        x = nose_pose_from_baselink.point.x
-        y = nose_pose_from_baselink.point.y
+            nose_pose_from_baselink: Pose = self.tamtf.get_pose_with_offset(
+                target_frame=self.description.frame.baselink,
+                source_frame=self.description.frame.rgbd,
+                offset=Pose(nose_point, Quaternion(0, 0, 0, 1)),
+            )
+        # sigverse
+        else:
+            nose_pose_from_map: Pose = self.tamtf.get_pose_with_offset(
+                target_frame=self.frame_map,
+                source_frame=self.frame_rgbd,
+                offset=Pose(nose_point, Quaternion(0, 0, 0, 1)),
+            )
+
+            nose_pose_from_baselink: Pose = self.tamtf.get_pose_with_offset(
+                target_frame=self.frame_baselink,
+                source_frame=self.frame_rgbd,
+                offset=Pose(nose_point, Quaternion(0, 0, 0, 1)),
+            )
+
+        x = nose_pose_from_baselink.position.x
+        y = nose_pose_from_baselink.position.y
 
         angle = math.atan2(y, x)
         self._prv_omni_degree = angle
@@ -154,7 +168,7 @@ class FocusPersonNode(Node):
         while not rospy.is_shutdown():
             if self.run_enable is False:
                 rospy.sleep(0.5)
-                self.logtrace("run enable is False")
+                self.logdebug("run enable is False")
                 continue
 
             # メッセージを取得する
