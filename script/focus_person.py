@@ -42,6 +42,8 @@ class FocusPersonNode(Node):
             self.hsrnav = LibHSRNavigation()
             # self.speech_recog = LibSpeechRecog()
         else:
+            from sigverse_hsrlib import MoveJoints
+            self.move_joint = MoveJoints()
             self.frame_map = "map"
             self.frame_baselink = "base_footprint"
             self.frame_rgbd = "head_rgbd_sensor_link"
@@ -134,15 +136,18 @@ class FocusPersonNode(Node):
         if abs(angle) > np.deg2rad(10.0).item():
             if angle < 0:
                 self.loginfo("右向きに旋回")
-                vel_t = -0.30
+                vel_t = -0.15
+                self.move_joint.move_base_joint(0, 0, vel_t, duration=0.5)
             else:
                 self.loginfo("左向きに旋回")
-                vel_t = 0.30
+                vel_t = 0.15
+                self.move_joint.move_base_joint(0, 0, vel_t, duration=0.5)
             # target_omni_joint_points.positions[2] = target_omni_joint_points.positions[2] + angle
             # target_omni_joint.points = [target_omni_joint_points]
             # target_omni_joint_points.velocities[2] = vel_t
             # self._pub_omni_base_controller.publish(target_omni_joint)
         else:
+            self.move_joint.move_base_joint(0, 0, 0, duration=0.1)
             self.loginfo("旋回を停止")
             # target_omni_joint_points.positions[2] = target_omni_joint_points.positions[2]
             # target_omni_joint.points = [target_omni_joint_points]
