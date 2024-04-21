@@ -26,7 +26,7 @@ from tam_mmaction2.msg import Ax3DPoseWithLabelArray, Ax3DPoseWithLabel, AxKeyPo
 
 class FocusPersonNode(Node):
     def __init__(self):
-        super().__init__(loglevel="DEBUG")
+        super().__init__(loglevel="INFO")
 
         # HSRに接続するためのインタフェースを確立
         self.tamtf = Transform()
@@ -62,6 +62,7 @@ class FocusPersonNode(Node):
         self._pub_omni_base_controller = rospy.Publisher("/hsrb/omni_base_controller/command", JointTrajectory, queue_size=1)
         self._pub_omni_base_controller = rospy.Publisher("/hsrb/omni_base_controller/command", JointTrajectory, queue_size=1)
         self._pub_head_controller = rospy.Publisher("/hsrb/head_trajectory_controller/command", JointTrajectory, queue_size=1)
+        self.initalize = True
 
         # self._sub_smi_3d_pose = message_filters.Subscriber(self._p_pose, Ax3DPoseWithLabelArray)
         # self._sub_smi_omni_joint_state = message_filters.Subscriber(self._p_omni_joint_state, JointTrajectoryControllerState)
@@ -135,11 +136,11 @@ class FocusPersonNode(Node):
 
         if abs(angle) > np.deg2rad(10.0).item():
             if angle < 0:
-                self.loginfo("右向きに旋回")
+                self.logdebug("右向きに旋回")
                 vel_t = -0.15
                 self.move_joint.move_base_joint(0, 0, vel_t, duration=0.5)
             else:
-                self.loginfo("左向きに旋回")
+                self.logdebug("左向きに旋回")
                 vel_t = 0.15
                 self.move_joint.move_base_joint(0, 0, vel_t, duration=0.5)
             # target_omni_joint_points.positions[2] = target_omni_joint_points.positions[2] + angle
@@ -148,7 +149,7 @@ class FocusPersonNode(Node):
             # self._pub_omni_base_controller.publish(target_omni_joint)
         else:
             self.move_joint.move_base_joint(0, 0, 0, duration=0.1)
-            self.loginfo("旋回を停止")
+            self.logdebug("旋回を停止")
             # target_omni_joint_points.positions[2] = target_omni_joint_points.positions[2]
             # target_omni_joint.points = [target_omni_joint_points]
             # target_omni_joint_points.velocities[2] = 0
@@ -167,14 +168,18 @@ class FocusPersonNode(Node):
         return None
 
     def run(self):
-        """実行関数"""
-        self.loginfo("start focus person node")
-
+        """実行関数
+        """
         while not rospy.is_shutdown():
             if self.run_enable is False:
+                self.initalize = True
+                self.logtrace("please run rosservice call /action_recognition_server/run_enable \"data: false\"")
                 rospy.sleep(0.5)
-                self.logdebug("run enable is False")
                 continue
+
+            if self.initalize:
+                self.initalize = False
+                self.loginfo("start focus person node")
 
             # メッセージを取得する
             msg: Ax3DPoseWithLabelArray = rospy.wait_for_message("/mmaction2/poses/with_label", Ax3DPoseWithLabelArray)

@@ -21,14 +21,15 @@ from tamlib.utils import Logger
 
 from std_msgs.msg import Bool
 from geometry_msgs.msg import Point, PointStamped
-from std_srvs.srv import SetBool, SetBoolResponse
+from std_srvs.srv import SetBool, SetBoolResponse, SetBoolRequest
 from visualization_msgs.msg import Marker, MarkerArray
 from tam_mmaction2.msg import Ax3DPoseWithLabel, Ax3DPoseWithLabelArray
-
+from tam_dynamic_map.srv import GetAllObjectPose
+from tam_dynamic_map.srv import GetAllObjectPoseResponse
 
 class PointingEstimation(Logger):
     def __init__(self):
-        Logger.__init__(self, loglevel="DEBUG")
+        Logger.__init__(self, loglevel="INFO")
 
         self.pose_threshold = rospy.get_param("~pose_th", 0.4)
         self.pointing_threshold = rospy.get_param("~pointing_th", 0.2)
@@ -37,6 +38,7 @@ class PointingEstimation(Logger):
         self.pointing_buffer_len = rospy.get_param("~buffer_length/pointing", 30)
         self.base_frame = rospy.get_param("~base_frame", "base_link")
         self.run_enable = rospy.get_param("~auto_start", True)  # Falseに変更予定
+        self.use_ic = rospy.get_param("~use_ic", True)
 
         self.tf_listener = tf.TransformListener()
 
@@ -50,13 +52,49 @@ class PointingEstimation(Logger):
 
         # ros interface
         rospy.Subscriber("/mmaction2/poses/with_label", Ax3DPoseWithLabelArray, self.cb_pose_array, queue_size=1)
+        if self.use_ic:
+            from interactive_cleanup.msg import InteractiveCleanupMsg
+            rospy.Subscriber("/interactive_cleanup/message/to_robot", InteractiveCleanupMsg, self.cb_moderator_info, queue_size=1)
+            self.pub_to_moderator = rospy.Publisher("/interactive_cleanup/message/to_moderator", InteractiveCleanupMsg)
+            self.focus_start_time = rospy.Time.now()
+            self.focus_duration = rospy.Duration(1)  # メッセージが来てから注目する時間
+
+            self.start_estimation_time = rospy.Time.now()
+            self.end_pointing_time = None
+            self.repointing_timeout = rospy.Duration(70)  # メッセージが来てから注目する時間
+
+            self.to_robot_msg = None
+
+            self.flag_pickup_set = False
+            self.flag_cleanup_set = False
+            rospy.set_param("/interactive_cleanup/pickup/point", 0)
+            rospy.set_param("/interactive_cleanup/cleanup/point", 0)
+            rospy.set_param("/interactive_cleanup/task/start", False)
+
         self.pub_pointing_line = rospy.Publisher("~pointing_line", Marker, queue_size=1)
         self.pub_pointing_position = rospy.Publisher("~pointing_position", Marker, queue_size=1)
+        self.srv_get_world_model = rospy.ServiceProxy("/tam_dynamic_map/get_all_obj_pose/service", GetAllObjectPose)
+        self.srv_focus_person_enable = rospy.Service("/pointing_estimation/run_enable", SetBool, self.cb_run_enable)
 
     def delete(self):
         """デストラクタ
         """
         return
+
+    def cb_run_enable(self, req: SetBoolRequest) -> SetBoolResponse:
+        response = SetBoolResponse()
+        if req.data:
+            self.run_enable = True
+            self.loginfo("start pointing estimation node!")
+            response.success = True
+            response.message = "start"
+        else:
+            self.run_enable = False
+            self.loginfo("stop pointing estimation node!")
+            response.success = True
+            response.message = "stop"
+
+        return response
 
     # コールバック関数
     def cb_pose_array(self, msg) -> None:
@@ -65,6 +103,32 @@ class PointingEstimation(Logger):
         self.latest_pose = msg
         self.base_frame = msg.header.frame_id
         self.update_flag = True
+
+    def cb_moderator_info(self, msg) -> None:
+        """Interactive Cleanupのメッセージを取得
+        """
+        self.to_robot_msg = msg.message
+        if self.to_robot_msg == "Pick_it_up!":
+            self.focus_start_time = rospy.Time.now()
+        if self.to_robot_msg == "Clean_up!":
+            self.focus_start_time = rospy.Time.now()
+            self.end_pointing_time = rospy.Time.now()
+
+    def plz_point_again(self) -> None:
+        """制御用変数の初期化と再度の指差し要求を行う関数
+        """
+        self.loginfo("pointing estimation is failed. Please point it aggain")
+        self.flag_pickup_set = False
+        self.flag_cleanup_set = False
+        self.start_estimation_time = rospy.Time.now()
+        self.end_pointing_time = None
+
+        rospy.set_param("/interactive_cleanup/pickup/point", 0)
+        rospy.set_param("/interactive_cleanup/cleanup/point", 0)
+        rospy.set_param("/interactive_cleanup/task/start", False)
+
+        msg = InteractiveCleanupMsg(message="Point_it_again")
+        self.pub_to_moderator.publish(msg)
 
     def check_straight_arm(self, target_arm_position) -> bool:
         """腕が伸びているかを確認する関数（伸びている＝指を指している）
@@ -76,6 +140,58 @@ class PointingEstimation(Logger):
             return False
         else:
             return True
+
+    def check_cross_plane(self, target_wrist_point, target_direction_vector, furniture):
+        """平面と指差しラインの直行しているポイントを見つける
+        """
+
+        center_pose = furniture.pose.position
+        scale = furniture.scale
+
+        plane_center_point = [center_pose.x, center_pose.y, center_pose.z]
+        plane = [
+            [center_pose.x - ((scale[0]) / 2), center_pose.y - ((scale[1]) / 2), center_pose.z],
+            [center_pose.x + ((scale[0]) / 2), center_pose.y + ((scale[1]) / 2), center_pose.z]
+        ]
+        np_plane = np.array(plane)
+        self.logdebug(np_plane)
+
+        # check which axis is horizontal
+        axis = None
+        if np_plane[:, 0].max() == np_plane[:, 0].min():
+            axis = 0
+        elif np_plane[:, 1].max() == np_plane[:, 1].min():
+            axis = 1
+        elif np_plane[:, 2].max() == np_plane[:, 2].min():
+            axis = 2
+        else:
+            rospy.logwarn("Invalid axis.")
+            return None
+        self.logdebug(f"axis is {axis}")
+
+        param_t = (np_plane[0][axis] - target_wrist_point[axis]) / target_direction_vector[axis]
+        if param_t <= 0.0 or param_t >= 10.0:
+            return None
+
+        cross_point = target_wrist_point + param_t * target_direction_vector
+        self.logdebug(cross_point)
+
+        # chech inside or outside
+        if axis == 0 and \
+        abs(cross_point[1] - plane_center_point[1]) <= abs(np_plane[:, 1].max() - np_plane[:, 1].min()) / 2.0 and \
+        abs(cross_point[2] - plane_center_point[2]) <= abs(np_plane[:, 2].max() - np_plane[:, 2].min()) / 2.0:
+            return cross_point
+        elif axis == 1 and \
+        abs(cross_point[0] - plane_center_point[0]) <= abs(np_plane[:, 0].max() - np_plane[:, 0].min()) / 2.0 and \
+        abs(cross_point[2] - plane_center_point[2]) <= abs(np_plane[:, 2].max() - np_plane[:, 2].min()) / 2.0:
+            return cross_point
+        elif axis == 2 and \
+        abs(cross_point[0] - plane_center_point[0]) <= abs(np_plane[:, 0].max() - np_plane[:, 0].min()) / 2.0 and \
+        abs(cross_point[1] - plane_center_point[1]) <= abs(np_plane[:, 1].max() - np_plane[:, 1].min()) / 2.0:
+            return cross_point
+
+        else:
+            return None
 
     def display_pointing_line(self, point_base, point_target, target_frame="map") -> None:
         """指差しの軌跡を描画
@@ -160,6 +276,11 @@ class PointingEstimation(Logger):
                 target_person = target_people_array[0]
             except AttributeError as e:
                 self.logwarn(e)
+                self.update_flag = False
+                continue
+            except IndexError as e:
+                self.logdebug(e)
+                self.logdebug("human did not detected")
                 self.update_flag = False
                 continue
 
@@ -267,10 +388,7 @@ class PointingEstimation(Logger):
                     self.update_flag = False
                     continue
 
-            # target_frame = self._furniture_json[0]["frame"]
             target_frame = "map"
-            print(target_wrist_point)
-            print(type(target_wrist_point))
             transed_target_wrist_point = self.transform_point(target_frame, self.base_frame, target_wrist_point)
             transed_target_shoulder_point = self.transform_point(target_frame, self.base_frame, target_shoulder_point)
 
@@ -278,38 +396,56 @@ class PointingEstimation(Logger):
             self.logdebug("display pointing line")
             self.display_pointing_line(transed_target_wrist_point, transed_target_wrist_point + (transed_target_wrist_point - transed_target_shoulder_point) * 3.0, target_frame=target_frame)
 
-            # # check cross plane
-            # for furniture in self._furniture_json:
-            #     self._current_pointed_furniture = furniture["name"]
-            #     self._current_height_th = furniture["height_th"]
-            #     cross_point = self.checkCrossPlane(transed_target_wrist_point, (transed_target_wrist_point - transed_target_shoulder_point) , np.array( furniture["plane"]))
-            #     if cross_point is not None:
-            #         self.display_pointing_position(cross_point, target_frame)
-            #         self.pointing_position_buffer.append(cross_point)
-            #         break
+            # check cross plane
+            self.world_model = self.srv_get_world_model()
+            for furniture_info in self.world_model.world_model.obj_poses:
+                self.logdebug(f"info is: \n {furniture_info}")
+                if furniture_info.id == "floor":
+                    cross_point: np.array = self.check_cross_plane(transed_target_wrist_point, (transed_target_wrist_point - transed_target_shoulder_point), furniture=furniture_info)
+                    if cross_point is not None:
+                        self.display_pointing_position(cross_point, target_frame)
+                        self.pointing_position_buffer.append(cross_point)
+                        self.loginfo(cross_point)
 
-            # # check pointed furniture change
-            # if self._current_pointed_furniture != self.prv_pointed_furniture and self.prv_pointed_furniture is not None:
-            #     rospy.logwarn("Pointed Furniture Changed from {} to {}".format(self.prv_pointed_furniture, self._current_pointed_furniture))
-            #     self.pointing_position_buffer.clear()
-            #     self._current_pointed_furniture = self.prv_pointed_furniture = None
+                        # Interactive cleanupに情報を送信
+                        if self.use_ic:
+                            cross_point_list = cross_point.tolist()
+                            current_time = rospy.Time.now()
+                            elapsed_time = current_time - self.focus_start_time
 
-            # if len(self.pointing_position_buffer) == self.pointing_buffer_len:
-            #     pointed_position_median = np.median(self.pointing_position_buffer.pop(), axis=0)
-            #     pointed_position_std = np.std(self.pointing_position_buffer.pop(), axis=0)
-            #     print(pointed_position_median)
-            #     print(pointed_position_std)
-            #     if np.all(pointed_position_std < 1.0):
-            #         self.loginfo("Pointed furniture: {}".format(self._current_pointed_furniture))
-            #         self.loginfo("Pointed Position: {}".format(pointed_position_median))
-            #         rospy.set_param("~furniture", self._current_pointed_furniture)
-            #         rospy.set_param("~position", pointed_position_median.tolist())
-            #         rospy.set_param("~height_th", self._current_height_th)
-            #         self.display_pointing_position(pointed_position_median, target_frame, lifetime=0)
-            #         self.run_enable = False
+                            # to_robot_msgの更新をもとに，把持座標と配置座標をparamに記録
+                            if self.to_robot_msg == "Pick_it_up!" and elapsed_time < self.focus_duration:
+                                self.flag_pickup_set = True
+                                rospy.set_param("/interactive_cleanup/pickup/point", cross_point_list)
 
-            # self.prv_pointed_furniture = self._current_pointed_furniture
-            # self._current_pointed_furniture = None
+                            if self.to_robot_msg == "Clean_up!" and elapsed_time < self.focus_duration:
+                                self.flag_cleanup_set = True
+                                rospy.set_param("/interactive_cleanup/cleanup/point", cross_point_list)
+
+            if self.use_ic:
+                if self.flag_pickup_set is True:
+                    if self.flag_cleanup_set is True:
+                        # 両方準備が整った段階でタスク開始
+                        self.logsuccess("pointing estimation is complete. task start!")
+                        rospy.set_param("/interactive_cleanup/task/start", True)
+
+                    # 指差しが終わったとき
+                    if self.end_pointing_time is not None:
+                        # 把持位置だけわかっていたら，タスク開始
+                        self.loginfo("pointing estimation is done only pointing object. task start!")
+                        rospy.set_param("/interactive_cleanup/task/start", True)
+
+                elif self.flag_cleanup_set is True:
+                    # 片付け位置だけわかった場合は，再度指差しを要求する
+                    self.plz_point_again()
+
+                # どちらもわからなかったとき
+                else:
+                    self.loginfo("could not estimate both pointing position")
+                    if self.end_pointing_time is not None:
+                        current_time = rospy.Time.now()
+                        if (current_time - self.start_estimation_time) > rospy.Duration(5):
+                            self.plz_point_again()
 
 
 if __name__ == "__main__":
