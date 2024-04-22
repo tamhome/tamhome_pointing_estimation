@@ -16,7 +16,7 @@ import message_filters
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from control_msgs.msg import JointTrajectoryControllerState
 from std_srvs.srv import SetBool, SetBoolResponse
-from geometry_msgs.msg import Quaternion, Pose, Point
+from geometry_msgs.msg import Quaternion, Pose, Point, Twist
 # from hma_ailia_msgs.msg import Ax3DPoseArray
 from tamlib.node_template import Node
 
@@ -26,7 +26,7 @@ from tam_mmaction2.msg import Ax3DPoseWithLabelArray, Ax3DPoseWithLabel, AxKeyPo
 
 class FocusPersonNode(Node):
     def __init__(self):
-        super().__init__(loglevel="INFO")
+        super().__init__(loglevel="DEBUG")
 
         # HSRに接続するためのインタフェースを確立
         self.tamtf = Transform()
@@ -62,6 +62,7 @@ class FocusPersonNode(Node):
         self._pub_omni_base_controller = rospy.Publisher("/hsrb/omni_base_controller/command", JointTrajectory, queue_size=1)
         self._pub_omni_base_controller = rospy.Publisher("/hsrb/omni_base_controller/command", JointTrajectory, queue_size=1)
         self._pub_head_controller = rospy.Publisher("/hsrb/head_trajectory_controller/command", JointTrajectory, queue_size=1)
+        self._pub_base_rot = rospy.Publisher('/hsrb/command_velocity', Twist, queue_size=1)
         self.initalize = True
 
         # self._sub_smi_3d_pose = message_filters.Subscriber(self._p_pose, Ax3DPoseWithLabelArray)
@@ -132,22 +133,28 @@ class FocusPersonNode(Node):
 
         angle = math.atan2(y, x)
         self._prv_omni_degree = angle
+        twist_msg = Twist()
 
         if abs(angle) > np.deg2rad(10.0).item():
             if angle < 0:
                 self.logdebug("右向きに旋回")
-                vel_t = -0.15
-                self.move_joint.move_base_joint(0, 0, vel_t, duration=0.5)
+                twist_msg.angular.z = -0.15
+                self._pub_base_rot.publish(twist_msg)
             else:
                 self.logdebug("左向きに旋回")
-                vel_t = 0.15
-                self.move_joint.move_base_joint(0, 0, vel_t, duration=0.5)
+                twist_msg.angular.z = 0.15
+                self._pub_base_rot.publish(twist_msg)
+
+                # vel_t = 0.15
+                # self.move_joint.move_base_joint(0, 0, vel_t, duration=0.5)
             # target_omni_joint_points.positions[2] = target_omni_joint_points.positions[2] + angle
             # target_omni_joint.points = [target_omni_joint_points]
             # target_omni_joint_points.velocities[2] = vel_t
             # self._pub_omni_base_controller.publish(target_omni_joint)
         else:
-            self.move_joint.move_base_joint(0, 0, 0, duration=0.1)
+            # self.move_joint.move_base_joint(0, 0, 0, duration=0.1)
+            twist_msg.angular.z = 0.0
+            self._pub_base_rot.publish(twist_msg)
             self.logdebug("旋回を停止")
             # target_omni_joint_points.positions[2] = target_omni_joint_points.positions[2]
             # target_omni_joint.points = [target_omni_joint_points]
