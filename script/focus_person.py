@@ -26,7 +26,7 @@ from tam_mmaction2.msg import Ax3DPoseWithLabelArray, Ax3DPoseWithLabel, AxKeyPo
 
 class FocusPersonNode(Node):
     def __init__(self):
-        super().__init__(loglevel="DEBUG")
+        super().__init__(loglevel="INFO")
 
         # HSRに接続するためのインタフェースを確立
         self.tamtf = Transform()
