@@ -26,6 +26,8 @@ from visualization_msgs.msg import Marker, MarkerArray
 from tam_mmaction2.msg import Ax3DPoseWithLabel, Ax3DPoseWithLabelArray
 from tam_dynamic_map.srv import GetAllObjectPose
 from tam_dynamic_map.srv import GetAllObjectPoseResponse
+from interactive_cleanup.msg import InteractiveCleanupMsg
+
 
 class PointingEstimation(Logger):
     def __init__(self):
@@ -53,6 +55,7 @@ class PointingEstimation(Logger):
         # ros interface
         rospy.Subscriber("/mmaction2/poses/with_label", Ax3DPoseWithLabelArray, self.cb_pose_array, queue_size=1)
         if self.use_ic:
+            self.loginfo("use interactive cleanup mode!")
             from interactive_cleanup.msg import InteractiveCleanupMsg
             rospy.Subscriber("/interactive_cleanup/message/to_robot", InteractiveCleanupMsg, self.cb_moderator_info, queue_size=1)
             self.pub_to_moderator = rospy.Publisher("/interactive_cleanup/message/to_moderator", InteractiveCleanupMsg)
@@ -61,12 +64,13 @@ class PointingEstimation(Logger):
 
             self.start_estimation_time = rospy.Time.now()
             self.end_pointing_time = None
-            self.repointing_timeout = rospy.Duration(70)  # メッセージが来てから注目する時間
+            self.repointing_timeout = rospy.Duration(50)  # メッセージが来てから注目する時間
 
             self.to_robot_msg = None
 
             self.flag_pickup_set = False
             self.flag_cleanup_set = False
+            self.flag_pointit_again = False
             rospy.set_param("/interactive_cleanup/pickup/point", 0)
             rospy.set_param("/interactive_cleanup/cleanup/point", 0)
             rospy.set_param("/interactive_cleanup/task/start", False)
@@ -127,6 +131,7 @@ class PointingEstimation(Logger):
         rospy.set_param("/interactive_cleanup/cleanup/point", 0)
         rospy.set_param("/interactive_cleanup/task/start", False)
 
+        self.loginfo("send Point_it_again message")
         msg = InteractiveCleanupMsg(message="Point_it_again")
         self.pub_to_moderator.publish(msg)
 
@@ -263,6 +268,38 @@ class PointingEstimation(Logger):
             if not self.run_enable:
                 rospy.sleep(0.1)
                 continue
+
+            if self.use_ic:
+                if self.flag_pickup_set is True:
+                    if self.flag_cleanup_set is True:
+                        # 両方準備が整った段階でタスク開始
+                        self.logsuccess("pointing estimation is complete. task start!")
+                        rospy.set_param("/interactive_cleanup/task/start", True)
+                        self.flag_pickup_set = False
+                        self.flag_cleanup_set = False
+
+                    # 指差しが終わったとき
+                    if self.end_pointing_time is not None:
+                        # 把持位置だけわかっていたら，タスク開始
+                        self.loginfo("pointing estimation is done only pointing object. task start!")
+                        rospy.set_param("/interactive_cleanup/task/start", True)
+                        self.flag_pickup_set = False
+                        self.flag_cleanup_set = False
+
+                elif self.flag_cleanup_set is True:
+                    # 片付け位置だけわかった場合は，再度指差しを要求する
+                    # self.plz_point_again()
+                    self.flag_pointit_again = True
+
+                if (rospy.Time.now() - self.start_estimation_time) > self.repointing_timeout:
+                    self.loginfo("timeout require repointing")
+                    # self.plz_point_again()
+                    self.flag_pointit_again = True
+
+                if self.flag_pointit_again:
+                    if self.flag_pickup_set:
+                        self.flag_pointit_again = False
+                    self.plz_point_again()
 
             # 新しい姿勢推定情報が入ってきていない場合はスキップ
             if not self.update_flag:
@@ -405,7 +442,7 @@ class PointingEstimation(Logger):
                     if cross_point is not None:
                         self.display_pointing_position(cross_point, target_frame)
                         self.pointing_position_buffer.append(cross_point)
-                        self.loginfo(cross_point)
+                        self.logtrace(cross_point)
 
                         # Interactive cleanupに情報を送信
                         if self.use_ic:
@@ -422,30 +459,34 @@ class PointingEstimation(Logger):
                                 self.flag_cleanup_set = True
                                 rospy.set_param("/interactive_cleanup/cleanup/point", cross_point_list)
 
-            if self.use_ic:
-                if self.flag_pickup_set is True:
-                    if self.flag_cleanup_set is True:
-                        # 両方準備が整った段階でタスク開始
-                        self.logsuccess("pointing estimation is complete. task start!")
-                        rospy.set_param("/interactive_cleanup/task/start", True)
+            # if self.use_ic:
+            #     if self.flag_pickup_set is True:
+            #         if self.flag_cleanup_set is True:
+            #             # 両方準備が整った段階でタスク開始
+            #             self.logsuccess("pointing estimation is complete. task start!")
+            #             rospy.set_param("/interactive_cleanup/task/start", True)
+            #             self.flag_pickup_set = False
+            #             self.flag_cleanup_set = False
 
-                    # 指差しが終わったとき
-                    if self.end_pointing_time is not None:
-                        # 把持位置だけわかっていたら，タスク開始
-                        self.loginfo("pointing estimation is done only pointing object. task start!")
-                        rospy.set_param("/interactive_cleanup/task/start", True)
+            #         # 指差しが終わったとき
+            #         if self.end_pointing_time is not None:
+            #             # 把持位置だけわかっていたら，タスク開始
+            #             self.loginfo("pointing estimation is done only pointing object. task start!")
+            #             rospy.set_param("/interactive_cleanup/task/start", True)
+            #             self.flag_pickup_set = False
+            #             self.flag_cleanup_set = False
 
-                elif self.flag_cleanup_set is True:
-                    # 片付け位置だけわかった場合は，再度指差しを要求する
-                    self.plz_point_again()
+            #     elif self.flag_cleanup_set is True:
+            #         # 片付け位置だけわかった場合は，再度指差しを要求する
+            #         self.plz_point_again()
 
                 # どちらもわからなかったとき
-                else:
-                    self.loginfo("could not estimate both pointing position")
-                    if self.end_pointing_time is not None:
-                        current_time = rospy.Time.now()
-                        if (current_time - self.start_estimation_time) > rospy.Duration(5):
-                            self.plz_point_again()
+                # else:
+                #     self.loginfo("could not estimate both pointing position")
+                #     if self.end_pointing_time is not None:
+                #         current_time = rospy.Time.now()
+                #         if (current_time - self.start_estimation_time) > rospy.Duration(5):
+                #             self.plz_point_again()
 
 
 if __name__ == "__main__":

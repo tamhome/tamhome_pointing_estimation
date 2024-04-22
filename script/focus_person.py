@@ -98,7 +98,6 @@ class FocusPersonNode(Node):
             None
         """
         # get person pose from base_link
-        print(type(human_info.keypoints.nose.point))
         nose_point: Point = human_info.keypoints.nose.point
 
         # 実機
