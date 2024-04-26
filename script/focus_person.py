@@ -138,11 +138,11 @@ class FocusPersonNode(Node):
         if abs(angle) > np.deg2rad(10.0).item():
             if angle < 0:
                 self.logdebug("右向きに旋回")
-                twist_msg.angular.z = -0.15
+                twist_msg.angular.z = -0.20
                 self._pub_base_rot.publish(twist_msg)
             else:
                 self.logdebug("左向きに旋回")
-                twist_msg.angular.z = 0.15
+                twist_msg.angular.z = 0.20
                 self._pub_base_rot.publish(twist_msg)
 
                 # vel_t = 0.15
@@ -192,6 +192,9 @@ class FocusPersonNode(Node):
             self.logdebug(f"detect {len(msg.people)} person")
 
             if len(msg.people) == 0:
+                twist_msg = Twist()
+                twist_msg.angular.z = 0.30
+                self._pub_base_rot.publish(twist_msg)
                 # 人が写っていないため，旋回して探すモードに移行
                 continue
 

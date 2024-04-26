@@ -35,7 +35,7 @@ class PointingEstimation(Logger):
 
         self.pose_threshold = rospy.get_param("~pose_th", 0.4)
         self.pointing_threshold = rospy.get_param("~pointing_th", 0.2)
-        self.elbow_distance_threshold = rospy.get_param("~elbow_distance_th", 0.07)
+        self.elbow_distance_threshold = rospy.get_param("~elbow_distance_th", 100.00)
         self.buffer_len = rospy.get_param("~buffer_length/pose", 10)
         self.pointing_buffer_len = rospy.get_param("~buffer_length/pointing", 30)
         self.base_frame = rospy.get_param("~base_frame", "base_link")
@@ -64,7 +64,7 @@ class PointingEstimation(Logger):
 
             self.start_estimation_time = rospy.Time.now()
             self.end_pointing_time = None
-            self.repointing_timeout = rospy.Duration(50)  # メッセージが来てから注目する時間
+            self.repointing_timeout = rospy.Duration(60)  # メッセージが来てから注目する時間
 
             self.to_robot_msg = None
 
@@ -263,6 +263,10 @@ class PointingEstimation(Logger):
     def run(self):
         """指差し認識の動作関数
         """
+        self.flag_pickup_set = False
+        self.flag_cleanup_set = False
+        self.flag_pointit_again = False
+
         while not rospy.is_shutdown():
 
             if not self.run_enable:
@@ -275,16 +279,16 @@ class PointingEstimation(Logger):
                         # 両方準備が整った段階でタスク開始
                         self.logsuccess("pointing estimation is complete. task start!")
                         rospy.set_param("/interactive_cleanup/task/start", True)
-                        self.flag_pickup_set = False
-                        self.flag_cleanup_set = False
+                        # self.flag_pickup_set = False
+                        # self.flag_cleanup_set = False
 
                     # 指差しが終わったとき
                     if self.end_pointing_time is not None:
                         # 把持位置だけわかっていたら，タスク開始
                         self.loginfo("pointing estimation is done only pointing object. task start!")
                         rospy.set_param("/interactive_cleanup/task/start", True)
-                        self.flag_pickup_set = False
-                        self.flag_cleanup_set = False
+                        # self.flag_pickup_set = False
+                        # self.flag_cleanup_set = False
 
                 elif self.flag_cleanup_set is True:
                     # 片付け位置だけわかった場合は，再度指差しを要求する
@@ -437,7 +441,8 @@ class PointingEstimation(Logger):
             self.world_model = self.srv_get_world_model()
             for furniture_info in self.world_model.world_model.obj_poses:
                 self.logdebug(f"info is: \n {furniture_info}")
-                if furniture_info.id == "floor":
+                # if furniture_info.id == "floor":
+                if True:
                     cross_point: np.array = self.check_cross_plane(transed_target_wrist_point, (transed_target_wrist_point - transed_target_shoulder_point), furniture=furniture_info)
                     if cross_point is not None:
                         self.display_pointing_position(cross_point, target_frame)
@@ -452,12 +457,14 @@ class PointingEstimation(Logger):
 
                             # to_robot_msgの更新をもとに，把持座標と配置座標をparamに記録
                             if self.to_robot_msg == "Pick_it_up!" and elapsed_time < self.focus_duration:
+                                self.loginfo("pickup point is setting!")
                                 self.flag_pickup_set = True
                                 rospy.set_param("/interactive_cleanup/pickup/point", cross_point_list)
 
                             if self.to_robot_msg == "Clean_up!" and elapsed_time < self.focus_duration:
                                 self.flag_cleanup_set = True
                                 rospy.set_param("/interactive_cleanup/cleanup/point", cross_point_list)
+                                rospy.set_param("/interactive_cleanup/cleanup/target_furniture", furniture_info.id)
 
             # if self.use_ic:
             #     if self.flag_pickup_set is True:
