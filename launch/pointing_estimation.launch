@@ -1,0 +1,38 @@
+<launch>
+
+    <arg name="map_path" default="$(find sigverse_hsrb_nav)/map/map.yaml" />
+    <arg name="use_map_topic" default="false" />
+    <arg name="use_map_server" default="true" />
+    <arg name="use_teleop" default="false" />
+    <arg name="debug" default="false" />
+    <arg name="use_rviz" default="true" />
+    <arg name="world_model_name" default="interactive_cleanup"/>
+    <arg name="upload_robot_model_launch" default="$(find hsrb_description)/robots/upload_hsrb.launch" />
+    <arg name="wait_to_ready" default="true" />
+
+    <arg name="is_sigverse" default="true"/>
+    <arg name="human_max_distance" default="10.0"/>
+
+    <!-- 人物認識 -->
+    <include file="$(find tam_mmaction2)/launch/simple_test.launch">
+        <arg name="is_sigverse" value="$(arg is_sigverse)"/>
+        <arg name="max_distance" value="$(arg human_max_distance)"/>
+    </include>
+
+    <!-- 人に注目 -->
+    <node pkg="tamhome_pointing_estimation" type="focus_person.py" name="focus_person_node" output="screen" respawn="true"/>
+
+    <!-- 指差し推定 -->
+    <node pkg="tamhome_pointing_estimation" type="pointing_estimation.py" name="pointing_estimation" output="screen" respawn="true"/>
+
+    <!-- world model 読み込み -->
+    <include file="$(find tam_dynamic_map)/launch/load_model.launch">
+        <arg name="world_model_name" value="$(arg world_model_name)"/>
+    </include>
+
+
+    <group if="$(arg use_rviz)">
+        <node name="rviz" pkg="rviz" type="rviz" args="-d $(find tamhome_interactive_cleanup)/config/interactive_cleanup.rviz" />
+    </group>
+
+</launch>

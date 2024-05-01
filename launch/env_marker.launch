@@ -1,8 +1,0 @@
-<launch>
-    <arg name="furniture_json" default="$(find hma_pointing_pkg)/config/json/furniture.json" />
-    <arg name="arena_json" default="$(find hma_pointing_pkg)/config/json/arena.json" />
-    <node pkg="hma_pointing_pkg" type="env_marker_node.py" name="env_marker_node" output="screen">
-        <param name="/furniture_json" type="str" value="$(arg furniture_json)"/>
-        <param name="/arena_json" type="str" value="$(arg arena_json)"/>
-    </node>
-</launch>
