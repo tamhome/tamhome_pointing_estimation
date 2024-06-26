@@ -138,11 +138,11 @@ class FocusPersonNode(Node):
         if abs(angle) > np.deg2rad(10.0).item():
             if angle < 0:
                 self.logdebug("右向きに旋回")
-                twist_msg.angular.z = -0.20
+                twist_msg.angular.z = -0.06
                 self._pub_base_rot.publish(twist_msg)
             else:
                 self.logdebug("左向きに旋回")
-                twist_msg.angular.z = 0.20
+                twist_msg.angular.z = 0.06
                 self._pub_base_rot.publish(twist_msg)
 
                 # vel_t = 0.15

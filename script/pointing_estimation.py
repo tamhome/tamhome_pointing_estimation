@@ -34,7 +34,7 @@ class PointingEstimation(Logger):
         Logger.__init__(self, loglevel="INFO")
 
         self.pose_threshold = rospy.get_param("~pose_th", 0.4)
-        self.pointing_threshold = rospy.get_param("~pointing_th", 0.2)
+        self.pointing_threshold = rospy.get_param("~pointing_th", 0.1)
         self.elbow_distance_threshold = rospy.get_param("~elbow_distance_th", 100.00)
         self.buffer_len = rospy.get_param("~buffer_length/pose", 10)
         self.pointing_buffer_len = rospy.get_param("~buffer_length/pointing", 30)
@@ -64,7 +64,7 @@ class PointingEstimation(Logger):
 
             self.start_estimation_time = rospy.Time.now()
             self.end_pointing_time = None
-            self.repointing_timeout = rospy.Duration(60)  # メッセージが来てから注目する時間
+            self.repointing_timeout = rospy.Duration(5000)  # メッセージが来てから注目する時間
 
             self.to_robot_msg = None
 
@@ -134,6 +134,8 @@ class PointingEstimation(Logger):
         self.loginfo("send Point_it_again message")
         msg = InteractiveCleanupMsg(message="Point_it_again")
         self.pub_to_moderator.publish(msg)
+        self.pointing_threshold = 0.05
+        rospy.sleep(1)
 
     def check_straight_arm(self, target_arm_position) -> bool:
         """腕が伸びているかを確認する関数（伸びている＝指を指している）
@@ -154,49 +156,96 @@ class PointingEstimation(Logger):
         scale = furniture.scale
 
         plane_center_point = [center_pose.x, center_pose.y, center_pose.z]
-        plane = [
-            [center_pose.x - ((scale[0]) / 2), center_pose.y - ((scale[1]) / 2), center_pose.z],
-            [center_pose.x + ((scale[0]) / 2), center_pose.y + ((scale[1]) / 2), center_pose.z]
-        ]
-        np_plane = np.array(plane)
-        self.logdebug(np_plane)
+        if furniture.id != "floor":
+            plane_list = [
+                # Z軸　上面
+                [
+                    [(center_pose.x - (scale[0] / 2)), (center_pose.y - (scale[1] / 2)), (center_pose.z + (scale[2]))],
+                    [(center_pose.x + (scale[0] / 2)), (center_pose.y + (scale[1] / 2)), (center_pose.z + (scale[2]))]
+                ],
 
-        # check which axis is horizontal
-        axis = None
-        if np_plane[:, 0].max() == np_plane[:, 0].min():
-            axis = 0
-        elif np_plane[:, 1].max() == np_plane[:, 1].min():
-            axis = 1
-        elif np_plane[:, 2].max() == np_plane[:, 2].min():
-            axis = 2
+                # X軸
+                [
+                    [(center_pose.x + (scale[0] / 2)), (center_pose.y - (scale[1] / 2)), (center_pose.z + (scale[2]))],
+                    [(center_pose.x + (scale[0] / 2)), (center_pose.y + (scale[1] / 2)), (center_pose.z - (scale[2]))]
+                ],
+                [
+                    [(center_pose.x - (scale[0] / 2)), (center_pose.y - (scale[1] / 2)), (center_pose.z + (scale[2]))],
+                    [(center_pose.x - (scale[0] / 2)), (center_pose.y + (scale[1] / 2)), (center_pose.z - (scale[2]))]
+                ],
+
+                # Y軸
+                [
+                    [(center_pose.x + (scale[0] / 2)), (center_pose.y - (scale[1] / 2)), (center_pose.z + (scale[2]))],
+                    [(center_pose.x - (scale[0] / 2)), (center_pose.y - (scale[1] / 2)), (center_pose.z - (scale[2]))]
+                ],
+                [
+                    [(center_pose.x + (scale[0] / 2)), (center_pose.y + (scale[1] / 2)), (center_pose.z + (scale[2]))],
+                    [(center_pose.x - (scale[0] / 2)), (center_pose.y + (scale[1] / 2)), (center_pose.z - (scale[2]))]
+                ],
+            ]
         else:
-            rospy.logwarn("Invalid axis.")
-            return None
-        self.logdebug(f"axis is {axis}")
+            plane_list = [
+                [
+                    [(center_pose.x - (scale[0] / 2)), (center_pose.y - (scale[1] / 2)), (center_pose.z)],
+                    [(center_pose.x + (scale[0] / 2)), (center_pose.y + (scale[1] / 2)), (center_pose.z)]
+                ]
+            ]
 
-        param_t = (np_plane[0][axis] - target_wrist_point[axis]) / target_direction_vector[axis]
-        if param_t <= 0.0 or param_t >= 10.0:
-            return None
+        for plane in plane_list:
 
-        cross_point = target_wrist_point + param_t * target_direction_vector
-        self.logdebug(cross_point)
+            np_plane = np.array(plane)
+            self.logdebug(np_plane)
 
-        # chech inside or outside
-        if axis == 0 and \
-        abs(cross_point[1] - plane_center_point[1]) <= abs(np_plane[:, 1].max() - np_plane[:, 1].min()) / 2.0 and \
-        abs(cross_point[2] - plane_center_point[2]) <= abs(np_plane[:, 2].max() - np_plane[:, 2].min()) / 2.0:
-            return cross_point
-        elif axis == 1 and \
-        abs(cross_point[0] - plane_center_point[0]) <= abs(np_plane[:, 0].max() - np_plane[:, 0].min()) / 2.0 and \
-        abs(cross_point[2] - plane_center_point[2]) <= abs(np_plane[:, 2].max() - np_plane[:, 2].min()) / 2.0:
-            return cross_point
-        elif axis == 2 and \
-        abs(cross_point[0] - plane_center_point[0]) <= abs(np_plane[:, 0].max() - np_plane[:, 0].min()) / 2.0 and \
-        abs(cross_point[1] - plane_center_point[1]) <= abs(np_plane[:, 1].max() - np_plane[:, 1].min()) / 2.0:
-            return cross_point
+            # check which axis is horizontal
+            axis = None
+            x_distance = np_plane[:, 0].max() - np_plane[:, 0].min()
+            y_distance = np_plane[:, 1].max() - np_plane[:, 1].min()
+            z_distance = np_plane[:, 2].max() - np_plane[:, 2].min()
 
-        else:
-            return None
+            if x_distance <= y_distance and x_distance <= z_distance:
+                axis = 0
+            elif y_distance <= x_distance and y_distance <= z_distance:
+                axis = 1
+            elif z_distance <= x_distance and z_distance <= y_distance:
+                axis = 2
+
+            else:
+                rospy.logwarn("Invalid axis.")
+                # return None
+                continue
+
+            self.logdebug(f"axis is {axis}")
+
+            param_t = (np_plane[0][axis] - target_wrist_point[axis]) / target_direction_vector[axis]
+            if param_t <= 0.0 or param_t >= 10.0:
+                # return None
+                continue
+
+            cross_point = target_wrist_point + param_t * target_direction_vector
+            self.logdebug(cross_point)
+
+            # check inside or outside
+            if axis == 0 and \
+            abs(cross_point[1] - plane_center_point[1]) <= abs(np_plane[:, 1].max() - np_plane[:, 1].min()) / 2.0 and \
+            abs(cross_point[2] - plane_center_point[2]) <= abs(np_plane[:, 2].max() - np_plane[:, 2].min()) / 2.0:
+                return cross_point
+
+            elif axis == 1 and \
+            abs(cross_point[0] - plane_center_point[0]) <= abs(np_plane[:, 0].max() - np_plane[:, 0].min()) / 2.0 and \
+            abs(cross_point[2] - plane_center_point[2]) <= abs(np_plane[:, 2].max() - np_plane[:, 2].min()) / 2.0:
+                return cross_point
+
+            elif axis == 2 and \
+            abs(cross_point[0] - plane_center_point[0]) <= abs(np_plane[:, 0].max() - np_plane[:, 0].min()) / 2.0 and \
+            abs(cross_point[1] - plane_center_point[1]) <= abs(np_plane[:, 1].max() - np_plane[:, 1].min()) / 2.0:
+                return cross_point
+
+            else:
+                continue
+                # return None
+
+        return None
 
     def display_pointing_line(self, point_base, point_target, target_frame="map") -> None:
         """指差しの軌跡を描画
@@ -279,6 +328,13 @@ class PointingEstimation(Logger):
                         # 両方準備が整った段階でタスク開始
                         self.logsuccess("pointing estimation is complete. task start!")
                         rospy.set_param("/interactive_cleanup/task/start", True)
+                        try:
+                            target_point = rospy.get_param("/interactive_cleanup/cleanup/point", 0)
+                            target_furniture = rospy.get_param("/interactive_cleanup/cleanup/target_furniture", "floor")
+                            self.loginfo(f"target point is {target_point}")
+                            self.loginfo(f"target furniture is {target_furniture}")
+                        except Exception as e:
+                            self.logwarn(e)
                         # self.flag_pickup_set = False
                         # self.flag_cleanup_set = False
 
@@ -397,7 +453,8 @@ class PointingEstimation(Logger):
                     continue
 
                 # 左腕で指を指していた場合
-                elif abs(left_arm_direction_vector[0]) + abs(left_arm_direction_vector[2]) > abs(right_arm_direction_vector[0]) + abs(right_arm_direction_vector[2]) and self.check_straight_arm(left_arm_pose):
+                # elif abs(left_arm_direction_vector[0]) + abs(left_arm_direction_vector[2]) > abs(right_arm_direction_vector[0]) + abs(right_arm_direction_vector[2]) and self.check_straight_arm(left_arm_pose):
+                elif abs(left_arm_direction_vector[0]) + abs(left_arm_direction_vector[2]) > abs(right_arm_direction_vector[0]) + abs(right_arm_direction_vector[2]):
                     self.logdebug("Focus on left arm")
                     if len(self.left_arm_pose_buffer) <= self.buffer_len:
                         self.logdebug("calc_pointing_line")
@@ -412,7 +469,8 @@ class PointingEstimation(Logger):
                         # continue
 
                 # 右腕で指を指していた場合
-                elif abs(right_arm_direction_vector[0]) + abs(right_arm_direction_vector[2]) > abs(left_arm_direction_vector[0]) + abs(left_arm_direction_vector[2]) and self.check_straight_arm(right_arm_pose):
+                # elif abs(right_arm_direction_vector[0]) + abs(right_arm_direction_vector[2]) > abs(left_arm_direction_vector[0]) + abs(left_arm_direction_vector[2]) and self.check_straight_arm(right_arm_pose):
+                elif abs(right_arm_direction_vector[0]) + abs(right_arm_direction_vector[2]) > abs(left_arm_direction_vector[0]) + abs(left_arm_direction_vector[2]):
                     self.logdebug("Focus on right arm")
                     if len(self.right_arm_pose_buffer) <= self.buffer_len:
                         target_positon_median = self.right_arm_pose_buffer.pop()
@@ -440,30 +498,30 @@ class PointingEstimation(Logger):
             # check cross plane
             self.world_model = self.srv_get_world_model()
             for furniture_info in self.world_model.world_model.obj_poses:
-                self.logdebug(f"info is: \n {furniture_info}")
-                # if furniture_info.id == "floor":
-                if True:
-                    cross_point: np.array = self.check_cross_plane(transed_target_wrist_point, (transed_target_wrist_point - transed_target_shoulder_point), furniture=furniture_info)
-                    if cross_point is not None:
-                        self.display_pointing_position(cross_point, target_frame)
-                        self.pointing_position_buffer.append(cross_point)
-                        self.logtrace(cross_point)
+                self.logdebug(f"furniture info is: \n {furniture_info}")
 
-                        # Interactive cleanupに情報を送信
-                        if self.use_ic:
-                            cross_point_list = cross_point.tolist()
-                            current_time = rospy.Time.now()
-                            elapsed_time = current_time - self.focus_start_time
+                cross_point: np.array = self.check_cross_plane(transed_target_wrist_point, (transed_target_wrist_point - transed_target_shoulder_point), furniture=furniture_info)
+                if cross_point is not None:
+                    self.display_pointing_position(cross_point, target_frame)
+                    self.pointing_position_buffer.append(cross_point)
+                    self.loginfo(cross_point)
 
-                            # to_robot_msgの更新をもとに，把持座標と配置座標をparamに記録
-                            if self.to_robot_msg == "Pick_it_up!" and elapsed_time < self.focus_duration:
-                                self.loginfo("pickup point is setting!")
-                                self.flag_pickup_set = True
-                                rospy.set_param("/interactive_cleanup/pickup/point", cross_point_list)
+                    # Interactive cleanupに情報を送信
+                    if self.use_ic:
+                        cross_point_list = cross_point.tolist()
+                        current_time = rospy.Time.now()
+                        elapsed_time = current_time - self.focus_start_time
 
-                            if self.to_robot_msg == "Clean_up!" and elapsed_time < self.focus_duration:
-                                self.flag_cleanup_set = True
-                                rospy.set_param("/interactive_cleanup/cleanup/point", cross_point_list)
+                        # to_robot_msgの更新をもとに，把持座標と配置座標をparamに記録
+                        if self.to_robot_msg == "Pick_it_up!" and elapsed_time < self.focus_duration:
+                            self.loginfo("pickup point is setting!")
+                            self.flag_pickup_set = True
+                            rospy.set_param("/interactive_cleanup/pickup/point", cross_point_list)
+
+                        if self.to_robot_msg == "Clean_up!" and elapsed_time < self.focus_duration:
+                            self.flag_cleanup_set = True
+                            rospy.set_param("/interactive_cleanup/cleanup/point", cross_point_list)
+                            if furniture_info.id != "floor":
                                 rospy.set_param("/interactive_cleanup/cleanup/target_furniture", furniture_info.id)
 
             # if self.use_ic:
