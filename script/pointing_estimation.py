@@ -416,7 +416,7 @@ class PointingEstimation(Logger):
 
             # one arm is available
             elif left_arm_pose is None:
-                self.loginfo("Focus on right arm")
+                self.logdebug("Focus on right arm")
                 if len(self.right_arm_pose_buffer) <= self.buffer_len:
                     # target_positon_median = np.median(self.right_arm_pose_buffer.pop(), axis=0)
                     target_positon_median = self.right_arm_pose_buffer.pop()
@@ -427,7 +427,7 @@ class PointingEstimation(Logger):
                     self.update_flag = False
                     continue
             elif right_arm_pose is None:
-                self.loginfo("Focus on left arm")
+                self.logdebug("Focus on left arm")
                 if len(self.left_arm_pose_buffer) <= self.buffer_len:
                     # target_positon_median = np.median(self.left_arm_pose_buffer.pop(), axis=0)
                     target_positon_median = self.left_arm_pose_buffer.pop()
@@ -449,7 +449,7 @@ class PointingEstimation(Logger):
                 if abs(left_arm_direction_vector[0]) < self.pointing_threshold and abs(left_arm_direction_vector[2]) < self.pointing_threshold and abs(right_arm_direction_vector[0]) < self.pointing_threshold and abs(right_arm_direction_vector[2]) < self.pointing_threshold:
                     # self._lock.release()
                     self.update_flag = False
-                    self.loginfo("Person do not pointing. skip")
+                    self.logdebug("Person do not pointing. skip")
                     continue
 
                 # 左腕で指を指していた場合
@@ -504,7 +504,7 @@ class PointingEstimation(Logger):
                 if cross_point is not None:
                     self.display_pointing_position(cross_point, target_frame)
                     self.pointing_position_buffer.append(cross_point)
-                    self.loginfo(cross_point)
+                    self.logdebug(cross_point)
 
                     # Interactive cleanupに情報を送信
                     if self.use_ic:

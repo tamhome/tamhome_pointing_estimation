@@ -64,6 +64,7 @@ class FocusPersonNode(Node):
         self._pub_head_controller = rospy.Publisher("/hsrb/head_trajectory_controller/command", JointTrajectory, queue_size=1)
         self._pub_base_rot = rospy.Publisher('/hsrb/command_velocity', Twist, queue_size=1)
         self.initalize = True
+        self.recovery_angular_velocity = 1.0
 
         # self._sub_smi_3d_pose = message_filters.Subscriber(self._p_pose, Ax3DPoseWithLabelArray)
         # self._sub_smi_omni_joint_state = message_filters.Subscriber(self._p_omni_joint_state, JointTrajectoryControllerState)
@@ -100,6 +101,7 @@ class FocusPersonNode(Node):
         """
         # get person pose from base_link
         nose_point: Point = human_info.keypoints.nose.point
+        self.logtrace(nose_point)
 
         # 実機
         if self.sigverse_flag is False:
@@ -140,10 +142,12 @@ class FocusPersonNode(Node):
                 self.logdebug("右向きに旋回")
                 twist_msg.angular.z = -0.06
                 self._pub_base_rot.publish(twist_msg)
+                self.recovery_angular_velocity = -1.0
             else:
                 self.logdebug("左向きに旋回")
                 twist_msg.angular.z = 0.06
                 self._pub_base_rot.publish(twist_msg)
+                self.recovery_angular_velocity = 1.0
 
                 # vel_t = 0.15
                 # self.move_joint.move_base_joint(0, 0, vel_t, duration=0.5)
@@ -191,11 +195,11 @@ class FocusPersonNode(Node):
             msg: Ax3DPoseWithLabelArray = rospy.wait_for_message("/mmaction2/poses/with_label", Ax3DPoseWithLabelArray)
             self.logdebug(f"detect {len(msg.people)} person")
 
+            # 人が写っていない場合，旋回して探すモードに移行
             if len(msg.people) == 0:
                 twist_msg = Twist()
-                twist_msg.angular.z = 0.30
+                twist_msg.angular.z = self.recovery_angular_velocity
                 self._pub_base_rot.publish(twist_msg)
-                # 人が写っていないため，旋回して探すモードに移行
                 continue
 
             # 鼻の座標をもとに，一番近い人を見つける
